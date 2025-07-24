@@ -6,11 +6,19 @@ import time
 from typing import List, Dict, Any
 from dataclasses import asdict
 import uvicorn
+from contextlib import asynccontextmanager
 
 # Import your existing connectors
 from connectors import AdvancedTradeConnector, KrakenConnector, OrderBookUpdate
 
-app = FastAPI(title="Crypto Arbitrage API", version="1.0.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Start the arbitrage detection service
+    task = asyncio.create_task(arbitrage_detector_service())
+    yield
+    task.cancel()
+
+app = FastAPI(title="Crypto Arbitrage API", version="1.0.0", lifespan=lifespan)
 
 # Add CORS middleware
 app.add_middleware(
@@ -202,11 +210,3 @@ async def arbitrage_detector_service():
         except Exception as e:
             print(f"Arbitrage detector error: {e}")
             await asyncio.sleep(1)
-
-@app.on_event("startup")
-async def startup_event():
-    # Start the arbitrage detection service
-    asyncio.create_task(arbitrage_detector_service())
-
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
