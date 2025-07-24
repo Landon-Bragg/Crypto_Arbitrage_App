@@ -51,10 +51,9 @@
 
 @layer base {
   * {
-    border-color: hsl(var(--border)); /* Fix here */
+    border-color: hsl(var(--border)); /* FIXED: use CSS variable directly */
   }
   body {
-    background-color: hsl(var(--background));
-    color: hsl(var(--foreground));
+    @apply bg-background text-foreground;
   }
 }
