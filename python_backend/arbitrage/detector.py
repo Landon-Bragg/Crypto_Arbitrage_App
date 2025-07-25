@@ -3,7 +3,6 @@ import time
 import logging
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
 import statistics
 from ..exchanges.base_exchange import Quote
 from ..exchanges.exchange_manager import exchange_manager
@@ -40,10 +39,8 @@ class ArbitrageOpportunity:
         """Calculate confidence score (0-1) based on multiple factors"""
         base_confidence = 0.4
         
-        # Spread factor (higher spread = higher confidence, up to a point)
         spread_factor = min(self.spread_percent / 3.0, 0.25)
         
-        # Volume factor
         volume_factor = 0.0
         if self.buy_volume and self.sell_volume:
             min_volume = min(self.buy_volume, self.sell_volume)
@@ -54,8 +51,7 @@ class ArbitrageOpportunity:
             else:
                 volume_factor = min(min_volume / 100.0, 0.15)
         
-        # Exchange reliability factor
-        reliable_exchanges = {'kraken'}  # Kraken is most reliable
+        reliable_exchanges = {'kraken'}
         good_exchanges = {'kucoin', 'bitfinex'}
         
         reliability_factor = 0.0
@@ -73,40 +69,24 @@ class ArbitrageOpportunity:
         if not self.buy_volume or not self.sell_volume:
             return 0.0
         
-        # Conservative volume limits
         volume_limits = {
-            'BTC': 0.5,
-            'ETH': 5.0,
-            'XRP': 1000.0,
-            'LTC': 10.0,
-            'ADA': 1000.0,
-            'DOT': 100.0,
-            'LINK': 100.0,
-            'UNI': 100.0
+            'BTC': 0.5, 'ETH': 5.0, 'XRP': 1000.0, 'LTC': 10.0,
+            'ADA': 1000.0, 'DOT': 100.0, 'LINK': 100.0, 'UNI': 100.0
         }
         
         symbol_base = self.symbol.split('/')[0]
         max_volume = volume_limits.get(symbol_base, 100.0)
         
-        tradeable_volume = min(
-            self.buy_volume,
-            self.sell_volume,
-            max_volume
-        )
-        
-        # Account for slippage (reduce by 10%)
-        effective_spread = self.spread * 0.9
+        tradeable_volume = min(self.buy_volume, self.sell_volume, max_volume)
+        effective_spread = self.spread * 0.9  # Account for slippage
         
         return effective_spread * tradeable_volume
     
     def _estimate_execution_time(self) -> float:
         """Estimate time window for execution in seconds"""
-        base_time = 30.0  # 30 seconds base
-        
-        # Higher spreads tend to disappear faster
+        base_time = 30.0
         spread_factor = max(0.5, 2.0 - (self.spread_percent / 0.5))
         
-        # More liquid pairs have shorter windows
         liquidity_factor = 1.0
         if 'BTC' in self.symbol or 'ETH' in self.symbol:
             liquidity_factor = 0.7
@@ -116,7 +96,7 @@ class ArbitrageOpportunity:
     def _assess_risk_level(self) -> str:
         """Assess risk level based on various factors"""
         if self.spread_percent > 1.0:
-            return "high"  # Too good to be true
+            return "high"
         elif self.spread_percent > 0.5:
             return "medium-high"
         elif self.spread_percent > 0.2:
@@ -209,34 +189,27 @@ class ArbitrageDetector:
         opportunities = []
         
         try:
-            # Fetch all quotes
             all_quotes = await exchange_manager.fetch_all_quotes()
             
             if len(all_quotes) < 2:
                 logger.warning("Need at least 2 exchanges for arbitrage detection")
                 return opportunities
             
-            # Analyze each symbol
             for symbol in exchange_manager.get_supported_symbols():
                 symbol_opportunities = self._analyze_symbol(symbol, all_quotes)
                 opportunities.extend(symbol_opportunities)
             
-            # Sort by profit potential
             opportunities.sort(key=lambda x: x.profit_potential, reverse=True)
             
-            # Update historical data
             self._update_historical_data(opportunities)
-            
-            # Update current opportunities
             self.opportunities = {opp.id: opp for opp in opportunities}
             
-            # Update statistics
             detection_time = time.time() - start_time
             self._update_detection_stats(detection_time, len(opportunities))
             
             if opportunities:
                 logger.info(f"🔍 Found {len(opportunities)} opportunities in {detection_time:.2f}s")
-                for opp in opportunities[:3]:  # Log top 3
+                for opp in opportunities[:3]:
                     logger.info(f"💰 {opp.symbol}: {opp.spread_percent:.3f}% "
                               f"({opp.buy_exchange} → {opp.sell_exchange}) "
                               f"Profit: ${opp.profit_potential:.2f}")
@@ -252,7 +225,6 @@ class ArbitrageDetector:
         """Analyze arbitrage opportunities for a specific symbol"""
         opportunities = []
         
-        # Get quotes for this symbol from all exchanges
         symbol_quotes = {}
         for exchange_name, quotes in all_quotes.items():
             if symbol in quotes:
@@ -261,14 +233,12 @@ class ArbitrageDetector:
         if len(symbol_quotes) < 2:
             return opportunities
         
-        # Compare all exchange pairs
         exchanges = list(symbol_quotes.keys())
         for i, buy_exchange in enumerate(exchanges):
             for j, sell_exchange in enumerate(exchanges):
-                if i >= j:  # Avoid duplicate comparisons
+                if i >= j:
                     continue
                 
-                # Check both directions
                 opportunities.extend(self._check_arbitrage_pair(
                     symbol, buy_exchange, symbol_quotes[buy_exchange],
                     sell_exchange, symbol_quotes[sell_exchange]
@@ -286,8 +256,8 @@ class ArbitrageDetector:
         opportunities = []
         
         try:
-            buy_price = buy_quote.ask  # We buy at ask
-            sell_price = sell_quote.bid  # We sell at bid
+            buy_price = buy_quote.ask
+            sell_price = sell_quote.bid
             
             if buy_price <= 0 or sell_price <= 0:
                 return opportunities
@@ -321,17 +291,14 @@ class ArbitrageDetector:
     
     def _update_historical_data(self, opportunities: List[ArbitrageOpportunity]):
         """Update historical opportunity data"""
-        # Add to historical data
         self.historical_opportunities.extend(opportunities)
         
-        # Keep only last 24 hours of data
         cutoff_time = time.time() - 86400  # 24 hours
         self.historical_opportunities = [
             opp for opp in self.historical_opportunities 
             if opp.timestamp > cutoff_time
         ]
         
-        # Update historical frequency for current opportunities
         for opportunity in opportunities:
             similar_count = sum(
                 1 for hist_opp in self.historical_opportunities
@@ -379,11 +346,7 @@ class ArbitrageDetector:
     def get_analytics(self) -> Dict:
         """Get comprehensive analytics"""
         current_time = time.time()
-        
-        # Current opportunities analytics
         current_opps = list(self.opportunities.values())
-        
-        # Historical analytics (last 24 hours)
         recent_opps = [
             opp for opp in self.historical_opportunities
             if current_time - opp.timestamp < 86400
@@ -396,59 +359,18 @@ class ArbitrageDetector:
                 "max_spread": max([opp.spread_percent for opp in current_opps]) if current_opps else 0,
                 "total_profit_potential": sum([opp.profit_potential for opp in current_opps]),
                 "avg_confidence": statistics.mean([opp.confidence_score for opp in current_opps]) if current_opps else 0,
-                "by_symbol": self._group_by_symbol(current_opps),
-                "by_exchange_pair": self._group_by_exchange_pair(current_opps)
             },
             "historical_24h": {
                 "total_opportunities": len(recent_opps),
                 "avg_spread": statistics.mean([opp.spread_percent for opp in recent_opps]) if recent_opps else 0,
                 "max_spread": max([opp.spread_percent for opp in recent_opps]) if recent_opps else 0,
                 "opportunities_per_hour": len(recent_opps) / 24,
-                "by_symbol": self._group_by_symbol(recent_opps),
-                "by_exchange_pair": self._group_by_exchange_pair(recent_opps)
             },
             "detection_stats": self.detection_stats,
             "alert_conditions": len(self.alert_conditions)
         }
         
         return analytics
-    
-    def _group_by_symbol(self, opportunities: List[ArbitrageOpportunity]) -> Dict:
-        """Group opportunities by symbol"""
-        grouped = {}
-        for opp in opportunities:
-            if opp.symbol not in grouped:
-                grouped[opp.symbol] = []
-            grouped[opp.symbol].append(opp)
-        
-        return {
-            symbol: {
-                "count": len(opps),
-                "avg_spread": statistics.mean([opp.spread_percent for opp in opps]),
-                "max_spread": max([opp.spread_percent for opp in opps]),
-                "total_profit": sum([opp.profit_potential for opp in opps])
-            }
-            for symbol, opps in grouped.items()
-        }
-    
-    def _group_by_exchange_pair(self, opportunities: List[ArbitrageOpportunity]) -> Dict:
-        """Group opportunities by exchange pair"""
-        grouped = {}
-        for opp in opportunities:
-            pair_key = f"{opp.buy_exchange}->{opp.sell_exchange}"
-            if pair_key not in grouped:
-                grouped[pair_key] = []
-            grouped[pair_key].append(opp)
-        
-        return {
-            pair: {
-                "count": len(opps),
-                "avg_spread": statistics.mean([opp.spread_percent for opp in opps]),
-                "max_spread": max([opp.spread_percent for opp in opps]),
-                "total_profit": sum([opp.profit_potential for opp in opps])
-            }
-            for pair, opps in grouped.items()
-        }
 
 # Global detector instance
 arbitrage_detector = ArbitrageDetector(min_spread_percent=0.05)

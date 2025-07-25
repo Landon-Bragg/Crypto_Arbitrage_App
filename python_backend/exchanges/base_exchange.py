@@ -63,19 +63,13 @@ class ExchangeStatus:
         if not self.connected:
             return 0.0
         
-        # Base score for being connected
         score = 0.5
-        
-        # Penalty for errors (max 0.3 penalty)
         error_penalty = min(self.error_count * 0.05, 0.3)
         score -= error_penalty
         
-        # Bonus for fast response times (max 0.2 bonus)
         if self.avg_response_time < 1.0:
             response_bonus = min((1.0 - self.avg_response_time) * 0.2, 0.2)
             score += response_bonus
-        
-        # Penalty for slow response times
         elif self.avg_response_time > 3.0:
             response_penalty = min((self.avg_response_time - 3.0) * 0.1, 0.3)
             score -= response_penalty
@@ -97,7 +91,7 @@ class BaseExchange(ABC):
             supported_symbols=symbols
         )
         self.response_times = []
-        self.max_response_times = 10  # Keep last 10 response times for averaging
+        self.max_response_times = 10
     
     @abstractmethod
     async def connect(self) -> bool:
@@ -153,7 +147,6 @@ class BaseExchange(ABC):
         """Perform health check on the exchange"""
         try:
             start_time = time.time()
-            # Try to fetch a single ticker as health check
             test_symbol = self.symbols[0] if self.symbols else "BTC/USD"
             result = await self.fetch_ticker(test_symbol)
             response_time = time.time() - start_time

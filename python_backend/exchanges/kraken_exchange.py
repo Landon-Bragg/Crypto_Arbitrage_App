@@ -2,7 +2,7 @@ import ccxt
 import asyncio
 import time
 import logging
-from typing import Optional, Dict, List
+from typing import Optional, List
 from .base_exchange import BaseExchange, Quote
 
 logger = logging.getLogger(__name__)
@@ -23,7 +23,6 @@ class KrakenExchange(BaseExchange):
             'LINK/USD': 'LINKUSD',
             'UNI/USD': 'UNIUSD'
         }
-        self.reverse_mapping = {v: k for k, v in self.symbol_mapping.items()}
     
     async def connect(self) -> bool:
         """Initialize connection to Kraken"""
@@ -31,13 +30,12 @@ class KrakenExchange(BaseExchange):
             self.exchange = ccxt.kraken({
                 'enableRateLimit': True,
                 'timeout': 15000,
-                'rateLimit': 3000,  # 3 seconds between requests
+                'rateLimit': 3000,
                 'options': {
                     'adjustForTimeDifference': True,
                 }
             })
             
-            # Test connection by loading markets
             await asyncio.get_event_loop().run_in_executor(
                 None, self.exchange.load_markets
             )
@@ -65,7 +63,6 @@ class KrakenExchange(BaseExchange):
             start_time = time.time()
             kraken_symbol = self.normalize_symbol(symbol)
             
-            # Fetch ticker with retry logic
             max_retries = 3
             ticker = None
             
@@ -87,7 +84,6 @@ class KrakenExchange(BaseExchange):
                 logger.warning(f"⚠️ Invalid ticker data from {self.name} for {symbol}")
                 return None
             
-            # Validate spread
             if ticker['bid'] >= ticker['ask']:
                 logger.warning(f"⚠️ Invalid spread from {self.name} for {symbol}")
                 return None
