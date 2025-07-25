@@ -38,7 +38,8 @@ class ExchangeManager:
     
     def __init__(self):
         self.exchanges = {}
-        self.symbols = ['BTC/USDT', 'ETH/USDT', 'XRP/USDT']  # Using USDT for better liquidity
+        # Focus on symbols with good liquidity across all three exchanges
+        self.symbols = ['BTC/USD', 'ETH/USD', 'XRP/USD', 'LTC/USD']
         self.quotes_cache = {}
         self.last_update = {}
         self.setup_exchanges()
@@ -46,45 +47,86 @@ class ExchangeManager:
     def setup_exchanges(self):
         """Initialize exchange connections - using public API only (no keys required)"""
         try:
-            # Binance setup - no API keys needed for public data
-            self.exchanges['binance'] = ccxt.binance({
-                'enableRateLimit': True,
-            })
-            logger.info("✅ Binance exchange initialized")
-            
-            # Coinbase Pro setup - no API keys needed for public data
-            self.exchanges['coinbasepro'] = ccxt.coinbasepro({
-                'enableRateLimit': True,
-            })
-            logger.info("✅ Coinbase Pro exchange initialized")
-            
-            # Kraken setup - no API keys needed for public data
+            # Kraken - reliable, US-based
             self.exchanges['kraken'] = ccxt.kraken({
                 'enableRateLimit': True,
+                'timeout': 15000,  # 15 second timeout
+                'rateLimit': 3000,  # 3 seconds between requests
             })
             logger.info("✅ Kraken exchange initialized")
+            
+            # KuCoin - good liquidity, works in Texas
+            self.exchanges['kucoin'] = ccxt.kucoin({
+                'enableRateLimit': True,
+                'timeout': 15000,
+                'rateLimit': 1000,  # 1 second between requests
+            })
+            logger.info("✅ KuCoin exchange initialized")
+            
+            # Bitfinex - excellent for arbitrage opportunities
+            self.exchanges['bitfinex'] = ccxt.bitfinex({
+                'enableRateLimit': True,
+                'timeout': 15000,
+                'rateLimit': 1500,  # 1.5 seconds between requests
+            })
+            logger.info("✅ Bitfinex exchange initialized")
             
         except Exception as e:
             logger.error(f"❌ Error setting up exchanges: {e}")
             raise
     
+    def normalize_symbol(self, symbol: str, exchange_name: str) -> str:
+        """Normalize symbol format for different exchanges"""
+        if exchange_name == 'kraken':
+            # Kraken uses XBT instead of BTC and different format
+            normalized = symbol.replace('BTC', 'XBT')
+            # Kraken sometimes uses different USD notation
+            if 'USD' in normalized:
+                return normalized
+        elif exchange_name == 'bitfinex':
+            # Bitfinex uses tXXXUSD format for trading symbols
+            base, quote = symbol.split('/')
+            if base == 'BTC':
+                base = 'BTC'  # Bitfinex uses BTC, not XBT
+            return f"t{base}{quote}"
+        elif exchange_name == 'kucoin':
+            # KuCoin uses standard format
+            return symbol
+        
+        return symbol
+    
     async def fetch_ticker(self, exchange_name: str, symbol: str) -> Optional[Quote]:
         """Fetch ticker data from a specific exchange"""
         try:
             exchange = self.exchanges[exchange_name]
+            normalized_symbol = self.normalize_symbol(symbol, exchange_name)
             
-            # Fetch ticker data
-            ticker = await asyncio.get_event_loop().run_in_executor(
-                None, exchange.fetch_ticker, symbol
-            )
+            # Add retry logic for better reliability
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    # Fetch ticker data
+                    ticker = await asyncio.get_event_loop().run_in_executor(
+                        None, exchange.fetch_ticker, normalized_symbol
+                    )
+                    break
+                except Exception as e:
+                    if attempt == max_retries - 1:
+                        raise e
+                    await asyncio.sleep(1)  # Wait 1 second before retry
             
             if not ticker or not ticker.get('bid') or not ticker.get('ask'):
                 logger.warning(f"⚠️ Invalid ticker data from {exchange_name} for {symbol}")
                 return None
             
+            # Validate that bid < ask (sanity check)
+            if ticker['bid'] >= ticker['ask']:
+                logger.warning(f"⚠️ Invalid spread from {exchange_name} for {symbol}: bid={ticker['bid']}, ask={ticker['ask']}")
+                return None
+            
             quote = Quote(
                 exchange=exchange_name,
-                symbol=symbol,
+                symbol=symbol,  # Use original symbol format
                 bid=float(ticker['bid']),
                 ask=float(ticker['ask']),
                 timestamp=time.time(),
@@ -92,7 +134,7 @@ class ExchangeManager:
                 ask_volume=ticker.get('askVolume')
             )
             
-            logger.debug(f"📊 {exchange_name} {symbol}: bid={quote.bid}, ask={quote.ask}")
+            logger.debug(f"📊 {exchange_name} {symbol}: bid=${quote.bid:.4f}, ask=${quote.ask:.4f}")
             return quote
             
         except ccxt.NetworkError as e:
@@ -109,16 +151,25 @@ class ExchangeManager:
         """Fetch quotes from all exchanges for all symbols"""
         all_quotes = {}
         
+        # Create tasks for all exchange-symbol combinations
         tasks = []
         for exchange_name in self.exchanges.keys():
             for symbol in self.symbols:
                 task = self.fetch_ticker(exchange_name, symbol)
                 tasks.append((exchange_name, symbol, task))
         
-        # Execute all requests concurrently
-        results = await asyncio.gather(*[task for _, _, task in tasks], return_exceptions=True)
+        # Execute all requests concurrently with timeout
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(*[task for _, _, task in tasks], return_exceptions=True),
+                timeout=30.0  # 30 second total timeout
+            )
+        except asyncio.TimeoutError:
+            logger.error("❌ Timeout fetching quotes from exchanges")
+            return all_quotes
         
         # Process results
+        successful_fetches = 0
         for (exchange_name, symbol, _), result in zip(tasks, results):
             if isinstance(result, Exception):
                 logger.error(f"❌ Error fetching {symbol} from {exchange_name}: {result}")
@@ -131,12 +182,14 @@ class ExchangeManager:
                 all_quotes[exchange_name] = {}
             
             all_quotes[exchange_name][symbol] = result
+            successful_fetches += 1
             
             # Update cache
             cache_key = f"{exchange_name}_{symbol}"
             self.quotes_cache[cache_key] = result
             self.last_update[cache_key] = time.time()
         
+        logger.info(f"✅ Successfully fetched {successful_fetches} quotes from {len(all_quotes)} exchanges")
         return all_quotes
     
     async def get_cached_quote(self, exchange: str, symbol: str, max_age: float = 30.0) -> Optional[Quote]:

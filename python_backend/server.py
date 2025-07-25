@@ -6,22 +6,16 @@ import time
 from typing import List, Dict, Any
 import uvicorn
 
-# Import our new modules
+# Import our modules
 from exchanges import exchange_manager
 from arbitrage_detector import arbitrage_detector
 
-# Define lifespan context manager without pydantic
-async def startup_event():
-    # Start the arbitrage detection service
-    print("🚀 Starting arbitrage detection service...")
-    asyncio.create_task(arbitrage_detector_service())
-
-app = FastAPI(title="Crypto Arbitrage API", version="2.0.0")
+app = FastAPI(title="Crypto Arbitrage API", version="2.1.0")
 
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://localhost:3000", "https://*.vercel.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -57,22 +51,28 @@ manager = ConnectionManager()
 @app.get("/")
 async def root():
     return {
-        "message": "Crypto Arbitrage API v2.0 - Now with live market data!",
+        "message": "Crypto Arbitrage API v2.1 - Focused on Kraken, KuCoin & Bitfinex",
         "exchanges": exchange_manager.get_supported_exchanges(),
-        "symbols": exchange_manager.get_supported_symbols()
+        "symbols": exchange_manager.get_supported_symbols(),
+        "status": "operational"
     }
 
 @app.get("/health")
 async def health_check():
     # Test exchange connections
     connections = await exchange_manager.test_connections()
+    stats = arbitrage_detector.get_statistics()
     
     return {
         "status": "healthy",
         "timestamp": time.time(),
         "exchanges": connections,
-        "opportunities_count": len(arbitrage_detector.get_current_opportunities()),
-        "connected_websockets": len(manager.active_connections)
+        "connected_exchanges": sum(connections.values()),
+        "total_exchanges": len(connections),
+        "opportunities_count": stats["total_opportunities"],
+        "connected_websockets": len(manager.active_connections),
+        "best_spread": stats["best_spread"],
+        "total_profit_potential": stats["total_profit_potential"]
     }
 
 @app.get("/exchanges")
@@ -82,7 +82,12 @@ async def get_exchanges():
     return {
         "exchanges": exchange_manager.get_supported_exchanges(),
         "symbols": exchange_manager.get_supported_symbols(),
-        "connections": connections
+        "connections": connections,
+        "exchange_info": {
+            "kraken": "US-based, highly reliable, good for BTC/ETH",
+            "kucoin": "International, good liquidity, wide selection",
+            "bitfinex": "International, excellent for arbitrage, high liquidity"
+        }
     }
 
 @app.get("/quotes")
@@ -98,7 +103,8 @@ async def get_live_quotes():
                 }
                 for exchange, symbols in quotes.items()
             },
-            "timestamp": time.time()
+            "timestamp": time.time(),
+            "total_quotes": sum(len(symbols) for symbols in quotes.values())
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching quotes: {str(e)}")
@@ -119,16 +125,33 @@ async def get_arbitrage_opportunities():
     """Get current arbitrage opportunities"""
     opportunities = arbitrage_detector.get_current_opportunities()
     quotes = arbitrage_detector.get_last_quotes()
+    stats = arbitrage_detector.get_statistics()
     
     return {
         "opportunities": opportunities,
         "metadata": {
             "lastUpdate": time.time(),
             "exchangesConnected": list(quotes.keys()),
-            "totalOpportunities": len(opportunities),
-            "averageSpread": sum(opp.get("spreadPercent", 0) for opp in opportunities) / max(len(opportunities), 1) if opportunities else 0,
-            "symbols": exchange_manager.get_supported_symbols()
+            "totalOpportunities": stats["total_opportunities"],
+            "averageSpread": stats["average_spread"],
+            "bestSpread": stats["best_spread"],
+            "totalProfitPotential": stats["total_profit_potential"],
+            "symbols": exchange_manager.get_supported_symbols(),
+            "minSpreadThreshold": arbitrage_detector.min_spread_percent
         }
+    }
+
+@app.get("/arbitrage/{symbol}")
+async def get_arbitrage_for_symbol(symbol: str):
+    """Get arbitrage opportunities for a specific symbol"""
+    all_opportunities = arbitrage_detector.get_current_opportunities()
+    symbol_opportunities = [opp for opp in all_opportunities if opp["symbol"] == symbol]
+    
+    return {
+        "symbol": symbol,
+        "opportunities": symbol_opportunities,
+        "count": len(symbol_opportunities),
+        "timestamp": time.time()
     }
 
 @app.websocket("/ws")
@@ -142,25 +165,42 @@ async def websocket_endpoint(websocket: WebSocket):
                 "type": "arbitrage_update",
                 "data": {
                     "opportunities": opportunities,
-                    "timestamp": time.time()
+                    "timestamp": time.time(),
+                    "count": len(opportunities)
                 }
             }
             await websocket.send_text(json.dumps(message))
         
-        # Keep connection alive
+        # Keep connection alive and send periodic updates
         while True:
-            await asyncio.sleep(1)
+            await asyncio.sleep(30)  # Send update every 30 seconds
+            opportunities = arbitrage_detector.get_current_opportunities()
+            message = {
+                "type": "arbitrage_update",
+                "data": {
+                    "opportunities": opportunities,
+                    "timestamp": time.time(),
+                    "count": len(opportunities)
+                }
+            }
+            await websocket.send_text(json.dumps(message))
+            
     except WebSocketDisconnect:
         manager.disconnect(websocket)
 
 async def arbitrage_detector_service():
     """Background service that continuously detects arbitrage opportunities"""
     print("🔍 Arbitrage detector service started")
+    print("🎯 Monitoring Kraken, KuCoin, and Bitfinex for opportunities...")
     
     while True:
         try:
+            start_time = time.time()
+            
             # Detect opportunities
             opportunities = await arbitrage_detector.detect_opportunities()
+            
+            detection_time = time.time() - start_time
             
             if opportunities:
                 # Broadcast to all connected WebSocket clients
@@ -168,15 +208,25 @@ async def arbitrage_detector_service():
                     "type": "arbitrage_update",
                     "data": {
                         "opportunities": [opp.to_dict() for opp in opportunities],
-                        "timestamp": time.time()
+                        "timestamp": time.time(),
+                        "count": len(opportunities),
+                        "detection_time": detection_time
                     }
                 }
                 await manager.broadcast(json.dumps(message))
                 
-                print(f"📡 Broadcasted {len(opportunities)} opportunities to {len(manager.active_connections)} clients")
+                print(f"📡 Found {len(opportunities)} opportunities in {detection_time:.2f}s, "
+                      f"broadcasted to {len(manager.active_connections)} clients")
+                
+                # Log best opportunity
+                best = max(opportunities, key=lambda x: x.spread_percent)
+                print(f"🏆 Best: {best.symbol} {best.spread_percent:.3f}% "
+                      f"({best.buy_exchange} → {best.sell_exchange})")
+            else:
+                print(f"😴 No opportunities found in {detection_time:.2f}s")
             
-            # Wait before next detection cycle
-            await asyncio.sleep(30)  # Check every 30 seconds
+            # Wait before next detection cycle (reduced to 20 seconds for more frequent updates)
+            await asyncio.sleep(20)
             
         except Exception as e:
             print(f"❌ Error in arbitrage detector service: {e}")
@@ -184,8 +234,11 @@ async def arbitrage_detector_service():
 
 @app.on_event("startup")
 async def on_startup():
-    await startup_event()
+    print("🚀 Starting arbitrage detection service...")
+    asyncio.create_task(arbitrage_detector_service())
 
 if __name__ == "__main__":
     print("🚀 Starting Crypto Arbitrage API server...")
+    print("🎯 Focused on Kraken, KuCoin, and Bitfinex")
+    print("📊 Monitoring BTC, ETH, XRP, and LTC")
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")

@@ -23,7 +23,7 @@ class ArbitrageOpportunity:
     
     def to_dict(self) -> Dict:
         return {
-            "id": f"{self.symbol}_{self.buy_exchange}_{self.sell_exchange}",
+            "id": f"{self.symbol}_{self.buy_exchange}_{self.sell_exchange}_{int(self.timestamp)}",
             "symbol": self.symbol,
             "buyExchange": self.buy_exchange,
             "sellExchange": self.sell_exchange,
@@ -34,11 +34,12 @@ class ArbitrageOpportunity:
             "timestamp": self.timestamp,
             "buyVolume": self.buy_volume,
             "sellVolume": self.sell_volume,
-            "confidence": self.calculate_confidence()
+            "confidence": self.calculate_confidence(),
+            "profitPotential": self.calculate_profit_potential()
         }
     
     def calculate_confidence(self) -> float:
-        """Calculate confidence score based on spread and volume"""
+        """Calculate confidence score based on spread, volume, and exchange reliability"""
         base_confidence = 0.5
         
         # Higher spread = higher confidence (up to a point)
@@ -48,17 +49,50 @@ class ArbitrageOpportunity:
         volume_factor = 0.0
         if self.buy_volume and self.sell_volume:
             min_volume = min(self.buy_volume, self.sell_volume)
-            volume_factor = min(min_volume / 10.0, 0.2)  # Max 0.2 boost for volume
+            # Scale volume factor based on asset type
+            if 'BTC' in self.symbol:
+                volume_factor = min(min_volume / 5.0, 0.2)  # BTC has lower volume
+            else:
+                volume_factor = min(min_volume / 50.0, 0.2)  # Other assets have higher volume
         
-        return min(base_confidence + spread_factor + volume_factor, 1.0)
+        # Exchange reliability factor
+        reliability_factor = 0.0
+        reliable_exchanges = {'kraken', 'kucoin', 'bitfinex'}
+        if self.buy_exchange in reliable_exchanges and self.sell_exchange in reliable_exchanges:
+            reliability_factor = 0.1
+        
+        return min(base_confidence + spread_factor + volume_factor + reliability_factor, 1.0)
+    
+    def calculate_profit_potential(self) -> float:
+        """Calculate potential profit in USD"""
+        if not self.buy_volume or not self.sell_volume:
+            return 0.0
+        
+        # Use the minimum volume available
+        tradeable_volume = min(self.buy_volume, self.sell_volume)
+        
+        # Limit to reasonable trading amounts
+        if 'BTC' in self.symbol:
+            tradeable_volume = min(tradeable_volume, 1.0)  # Max 1 BTC
+        elif 'ETH' in self.symbol:
+            tradeable_volume = min(tradeable_volume, 10.0)  # Max 10 ETH
+        else:
+            tradeable_volume = min(tradeable_volume, 1000.0)  # Max 1000 for other assets
+        
+        return self.spread * tradeable_volume
 
 class ArbitrageDetector:
     """Detects arbitrage opportunities across exchanges"""
     
-    def __init__(self, min_spread_percent: float = 0.1):
+    def __init__(self, min_spread_percent: float = 0.05):  # Lowered threshold to 0.05%
         self.min_spread_percent = min_spread_percent
         self.opportunities = {}
         self.last_quotes = {}
+        self.exchange_pairs = [
+            ('kraken', 'kucoin'),
+            ('kraken', 'bitfinex'),
+            ('kucoin', 'bitfinex')
+        ]
     
     async def detect_opportunities(self) -> List[ArbitrageOpportunity]:
         """Detect arbitrage opportunities from current market data"""
@@ -69,16 +103,31 @@ class ArbitrageDetector:
             all_quotes = await exchange_manager.fetch_all_quotes()
             self.last_quotes = all_quotes
             
-            # Check each symbol
+            if not all_quotes:
+                logger.warning("⚠️ No quotes received from any exchange")
+                return opportunities
+            
+            # Check each symbol across exchange pairs
             for symbol in exchange_manager.get_supported_symbols():
                 symbol_opportunities = self._find_arbitrage_for_symbol(symbol, all_quotes)
                 opportunities.extend(symbol_opportunities)
             
-            # Update opportunities cache
-            self.opportunities = {opp.symbol + "_" + opp.buy_exchange + "_" + opp.sell_exchange: opp 
-                               for opp in opportunities}
+            # Sort opportunities by spread percentage (best first)
+            opportunities.sort(key=lambda x: x.spread_percent, reverse=True)
             
-            logger.info(f"🔍 Found {len(opportunities)} arbitrage opportunities")
+            # Update opportunities cache
+            self.opportunities = {
+                f"{opp.symbol}_{opp.buy_exchange}_{opp.sell_exchange}": opp 
+                for opp in opportunities
+            }
+            
+            if opportunities:
+                logger.info(f"🔍 Found {len(opportunities)} arbitrage opportunities")
+                for opp in opportunities[:3]:  # Log top 3
+                    logger.info(f"💰 {opp.symbol}: {opp.spread_percent:.3f}% spread "
+                              f"({opp.buy_exchange} → {opp.sell_exchange})")
+            else:
+                logger.info("😴 No arbitrage opportunities found above threshold")
             
         except Exception as e:
             logger.error(f"❌ Error detecting opportunities: {e}")
@@ -88,28 +137,27 @@ class ArbitrageDetector:
     def _find_arbitrage_for_symbol(self, symbol: str, all_quotes: Dict) -> List[ArbitrageOpportunity]:
         """Find arbitrage opportunities for a specific symbol"""
         opportunities = []
-        exchanges_with_data = []
         
-        # Collect exchanges that have data for this symbol
+        # Get quotes for this symbol from all exchanges
+        symbol_quotes = {}
         for exchange_name, quotes in all_quotes.items():
             if symbol in quotes:
-                exchanges_with_data.append((exchange_name, quotes[symbol]))
+                symbol_quotes[exchange_name] = quotes[symbol]
         
-        if len(exchanges_with_data) < 2:
+        if len(symbol_quotes) < 2:
             return opportunities
         
-        # Compare all pairs of exchanges
-        for i, (buy_exchange, buy_quote) in enumerate(exchanges_with_data):
-            for j, (sell_exchange, sell_quote) in enumerate(exchanges_with_data):
-                if i >= j:  # Avoid duplicate comparisons
-                    continue
-                
+        # Check all exchange pairs
+        for buy_exchange, sell_exchange in self.exchange_pairs:
+            if buy_exchange in symbol_quotes and sell_exchange in symbol_quotes:
                 # Check both directions
                 opportunities.extend(self._check_arbitrage_pair(
-                    symbol, buy_exchange, buy_quote, sell_exchange, sell_quote
+                    symbol, buy_exchange, symbol_quotes[buy_exchange], 
+                    sell_exchange, symbol_quotes[sell_exchange]
                 ))
                 opportunities.extend(self._check_arbitrage_pair(
-                    symbol, sell_exchange, sell_quote, buy_exchange, buy_quote
+                    symbol, sell_exchange, symbol_quotes[sell_exchange],
+                    buy_exchange, symbol_quotes[buy_exchange]
                 ))
         
         return opportunities
@@ -129,7 +177,8 @@ class ArbitrageDetector:
             spread = sell_price - buy_price
             spread_percent = (spread / buy_price) * 100
             
-            if spread_percent >= self.min_spread_percent:
+            # Only consider positive spreads above our threshold
+            if spread > 0 and spread_percent >= self.min_spread_percent:
                 opportunity = ArbitrageOpportunity(
                     symbol=symbol,
                     buy_exchange=buy_exchange,
@@ -144,8 +193,8 @@ class ArbitrageDetector:
                 )
                 opportunities.append(opportunity)
                 
-                logger.info(f"💰 Arbitrage found: {symbol} - Buy {buy_exchange} @ {buy_price:.4f}, "
-                          f"Sell {sell_exchange} @ {sell_price:.4f}, Spread: {spread_percent:.2f}%")
+                logger.debug(f"💰 Arbitrage found: {symbol} - Buy {buy_exchange} @ ${buy_price:.4f}, "
+                           f"Sell {sell_exchange} @ ${sell_price:.4f}, Spread: {spread_percent:.3f}%")
         
         except Exception as e:
             logger.error(f"❌ Error checking arbitrage pair: {e}")
@@ -164,6 +213,27 @@ class ArbitrageDetector:
             for symbol, quote in quotes.items():
                 result[exchange][symbol] = quote.to_dict()
         return result
+    
+    def get_statistics(self) -> Dict:
+        """Get statistics about current opportunities"""
+        opportunities = list(self.opportunities.values())
+        if not opportunities:
+            return {
+                "total_opportunities": 0,
+                "average_spread": 0.0,
+                "best_spread": 0.0,
+                "total_profit_potential": 0.0
+            }
+        
+        spreads = [opp.spread_percent for opp in opportunities]
+        profits = [opp.calculate_profit_potential() for opp in opportunities]
+        
+        return {
+            "total_opportunities": len(opportunities),
+            "average_spread": sum(spreads) / len(spreads),
+            "best_spread": max(spreads),
+            "total_profit_potential": sum(profits)
+        }
 
-# Global detector instance
-arbitrage_detector = ArbitrageDetector(min_spread_percent=0.1)  # 0.1% minimum spread
+# Global detector instance with lower threshold for more opportunities
+arbitrage_detector = ArbitrageDetector(min_spread_percent=0.05)  # 0.05% minimum spread
