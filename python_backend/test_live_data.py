@@ -6,7 +6,7 @@ import asyncio
 import json
 import time
 from exchanges import exchange_manager
-from arbitrage_detector import arbitrage_detector
+from arbitrage.detector import arbitrage_detector
 
 async def test_exchange_connections():
     """Test connections to our three focused exchanges"""

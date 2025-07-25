@@ -8,7 +8,7 @@ import uvicorn
 
 # Import our modules
 from exchanges import exchange_manager
-from arbitrage_detector import arbitrage_detector
+from arbitrage.detector import arbitrage_detector
 
 app = FastAPI(title="Crypto Arbitrage API", version="2.1.0")
 
@@ -159,12 +159,12 @@ async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
     try:
         # Send current opportunities immediately
-        opportunities = arbitrage_detector.get_current_opportunities()
+        opportunities = list(arbitrage_detector.opportunities.values())
         if opportunities:
             message = {
                 "type": "arbitrage_update",
                 "data": {
-                    "opportunities": opportunities,
+                    "opportunities": [opp.to_dict() for opp in opportunities],
                     "timestamp": time.time(),
                     "count": len(opportunities)
                 }
@@ -174,11 +174,11 @@ async def websocket_endpoint(websocket: WebSocket):
         # Keep connection alive and send periodic updates
         while True:
             await asyncio.sleep(30)  # Send update every 30 seconds
-            opportunities = arbitrage_detector.get_current_opportunities()
+            opportunities = list(arbitrage_detector.opportunities.values())
             message = {
                 "type": "arbitrage_update",
                 "data": {
-                    "opportunities": opportunities,
+                    "opportunities": [opp.to_dict() for opp in opportunities],
                     "timestamp": time.time(),
                     "count": len(opportunities)
                 }

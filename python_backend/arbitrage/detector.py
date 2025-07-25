@@ -4,8 +4,8 @@ import logging
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 import statistics
-from ..exchanges.base_exchange import Quote
-from ..exchanges.exchange_manager import exchange_manager
+from exchanges.base_exchange import Quote
+from exchanges.exchange_manager import exchange_manager
 
 logger = logging.getLogger(__name__)
 
