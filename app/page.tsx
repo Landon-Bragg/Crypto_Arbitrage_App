@@ -52,15 +52,17 @@ export default function LandingPage() {
             algorithms monitor price differences and alert you to actionable trades.
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
-            <Button size="lg" className="bg-purple-600 hover:bg-purple-700 text-lg px-8 py-4">
-              Start Free Trial <ArrowRight className="ml-2 h-5 w-5" />
-            </Button>
+            <Link href="/dashboard">
+              <Button size="lg" className="bg-purple-600 hover:bg-purple-700 text-lg px-8 py-4">
+                View Live Dashboard <ArrowRight className="ml-2 h-5 w-5" />
+              </Button>
+            </Link>
             <Button
               size="lg"
               variant="outline"
               className="border-white/20 text-white hover:bg-white/10 text-lg px-8 py-4 bg-transparent"
             >
-              View Live Demo
+              Learn More
             </Button>
           </div>
         </div>
@@ -81,7 +83,7 @@ export default function LandingPage() {
               </CardHeader>
               <CardContent className="text-gray-300">
                 <ul className="space-y-2">
-                  <li>• WebSocket connections to major exchanges</li>
+                  <li>• Live connections to major exchanges</li>
                   <li>• Sub-second opportunity alerts</li>
                   <li>• Live order book analysis</li>
                 </ul>

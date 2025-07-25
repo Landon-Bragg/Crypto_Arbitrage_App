@@ -148,14 +148,16 @@ class BaseExchange(ABC):
         try:
             start_time = time.time()
             test_symbol = self.symbols[0] if self.symbols else "BTC/USD"
-            result = await self.fetch_ticker(test_symbol)
+            normalized_symbol = self.normalize_symbol(test_symbol)
+
+            result = await self.fetch_ticker(normalized_symbol)
             response_time = time.time() - start_time
-            
+
             self.update_response_time(response_time)
             self.status.connected = result is not None
-            
+
             return self.status.connected
-            
+
         except Exception as e:
             logger.error(f"Health check failed for {self.name}: {e}")
             self.status.connected = False

@@ -10,8 +10,8 @@ from datetime import datetime
 import logging
 
 # Import our modules
-from ..exchanges.exchange_manager import exchange_manager
-from ..arbitrage.detector import arbitrage_detector, AlertCondition
+from exchanges.exchange_manager import exchange_manager
+from arbitrage.detector import arbitrage_detector, AlertCondition
 
 # Configure logging
 logging.basicConfig(

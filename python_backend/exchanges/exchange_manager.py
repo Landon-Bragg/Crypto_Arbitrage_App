@@ -14,9 +14,10 @@ class ExchangeManager:
     
     def __init__(self):
         self.symbols = [
-            'BTC/USD', 'ETH/USD', 'XRP/USD', 'LTC/USD', 
-            'ADA/USD', 'DOT/USD', 'LINK/USD', 'UNI/USD'
+            'BTC/USDT', 'ETH/USDT', 'XRP/USDT', 'LTC/USDT', 
+            'ADA/USDT', 'DOT/USDT', 'LINK/USDT'
         ]
+
         
         self.exchanges: Dict[str, BaseExchange] = {
             'kraken': KrakenExchange(self.symbols),

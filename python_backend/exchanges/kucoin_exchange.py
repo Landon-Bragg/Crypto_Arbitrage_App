@@ -37,7 +37,7 @@ class KuCoinExchange(BaseExchange):
             return False
     
     def normalize_symbol(self, symbol: str) -> str:
-        return symbol  # KuCoin uses standard format
+        return symbol
     
     async def fetch_ticker(self, symbol: str) -> Optional[Quote]:
         if not self.exchange or not self.status.connected:
